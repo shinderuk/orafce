@@ -218,18 +218,43 @@ _nls_run_strxfrm(text *string, text *locale)
 		tmp = palloc(size + VARHDRSZ);
 
 		rest = strxfrm(tmp + VARHDRSZ, string_str, size);
-		while (rest >= size)
+#ifdef WIN32
+
+		/*
+		 * On Windows, strxfrm returns INT_MAX when an error occurs. Instead
+		 * of trying to allocate this much memory (and fail), just return the
+		 * original string unmodified as if we were in the C locale.
+		 */
+		if (rest == INT_MAX)
 		{
 			pfree(tmp);
-			size = rest + 1;
-			tmp = palloc(size + VARHDRSZ);
-			rest = strxfrm(tmp + VARHDRSZ, string_str, size);
-			/*
-			 * Cache the multiplication factor so that the next
-			 * time we start with better value.
-			 */
-			if (string_len)
-				multiplication = (rest / string_len) + 2;
+			tmp = NULL;
+		}
+		else
+#endif
+		{
+			while (rest >= size)
+			{
+				pfree(tmp);
+				size = rest + 1;
+				tmp = palloc(size + VARHDRSZ);
+				rest = strxfrm(tmp + VARHDRSZ, string_str, size);
+#ifdef WIN32
+				/* strxfrm failed; return the original string */
+				if (rest == INT_MAX)
+				{
+					pfree(tmp);
+					tmp = NULL;
+					break;
+				}
+#endif
+				/*
+				 * Cache the multiplication factor so that the next
+				 * time we start with better value.
+				 */
+				if (string_len)
+					multiplication = (rest / string_len) + 2;
+			}
 		}
 	}
 	PG_CATCH ();
@@ -241,6 +266,7 @@ _nls_run_strxfrm(text *string, text *locale)
 			if (!setlocale(LC_COLLATE, lc_collate_cache))
 				elog(FATAL, "failed to set back the default LC_COLLATE value [%s]", lc_collate_cache);
 		}
+		PG_RE_THROW();
 	}
 	PG_END_TRY ();
 
@@ -254,6 +280,12 @@ _nls_run_strxfrm(text *string, text *locale)
 		pfree(locale_str);
 	}
 	pfree(string_str);
+
+#ifdef WIN32
+	/* strxfrm failed; return the original string */
+	if (rest == INT_MAX)
+		return string;
+#endif
 
 	/*
 	 * If the multiplication factor went down, reset it.
