@@ -1,6 +1,9 @@
 #include "postgres.h"
 #include <stdlib.h>
 #include <locale.h>
+#ifdef LOCALE_T_IN_XLOCALE
+#include <xlocale.h>
+#endif
 #include "catalog/pg_operator.h"
 #include "catalog/pg_type.h"
 #include "fmgr.h"
@@ -297,6 +300,109 @@ ora_nlssort(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 
 	PG_RETURN_BYTEA_P(result);
+}
+
+static char *nlssort_lc_collate;
+
+PG_FUNCTION_INFO_V1(ora_set_nls_sort2);
+
+Datum
+ora_set_nls_sort2(PG_FUNCTION_ARGS)
+{
+	char	   *lc_collate = text_to_cstring(PG_GETARG_TEXT_PP(0));
+	char	   *coll = strdup(lc_collate);
+
+	if (coll == NULL)
+		elog(ERROR, "out of memory");
+
+	free(nlssort_lc_collate);
+	nlssort_lc_collate = coll;
+
+	PG_RETURN_VOID();
+}
+
+PG_FUNCTION_INFO_V1(ora_nlssort2);
+
+Datum
+ora_nlssort2(PG_FUNCTION_ARGS)
+{
+	/* Cache the last used locale for subsequent calls. */
+	static char *cached_lc_collate;
+	static locale_t cached_locale;
+
+	char	   *str;
+	char	   *lc_collate;
+	bool		use_global_locale;
+	size_t		len;
+	size_t		len2;
+	bytea	   *res;
+
+	if (PG_ARGISNULL(0))
+		PG_RETURN_NULL();
+	str = text_to_cstring(PG_GETARG_TEXT_PP(0));
+
+	if (PG_ARGISNULL(1))
+		lc_collate = nlssort_lc_collate;
+	else
+		lc_collate = text_to_cstring(PG_GETARG_TEXT_PP(1));
+
+	if (lc_collate == NULL || lc_collate[0] == '\0')
+		use_global_locale = true;
+	else
+	{
+		use_global_locale = false;
+
+		/*
+		 * Use the cached locale if available. Otherwise, create a new locale
+		 * and cache it.
+		 */
+		if (cached_lc_collate == NULL ||
+			strcmp(lc_collate, cached_lc_collate) != 0)
+		{
+			char	   *coll = strdup(lc_collate);
+			locale_t	loc;
+
+			if (coll == NULL)
+				elog(ERROR, "out of memory");
+#ifndef WIN32
+			loc = newlocale(LC_COLLATE_MASK, lc_collate, NULL);
+#else
+			loc = _create_locale(LC_COLLATE, lc_collate);
+#endif
+			if (loc == NULL)
+			{
+				free(coll);
+				elog(ERROR, "failed to set the requested LC_COLLATE value [%s]", lc_collate);
+			}
+
+			free(cached_lc_collate);
+			if (cached_locale != NULL)
+#ifndef WIN32
+				freelocale(cached_locale);
+#else
+				_free_locale(cached_locale);
+#endif
+			cached_lc_collate = coll;
+			cached_locale = loc;
+		}
+
+		Assert(cached_locale != NULL);
+	}
+
+	/* Call strxfrm/strxfrm_l and return the result. */
+	if (use_global_locale)
+		len = strxfrm(NULL, str, 0);
+	else
+		len = strxfrm_l(NULL, str, 0, cached_locale);
+	res = palloc(len + 1 + VARHDRSZ);
+	if (use_global_locale)
+		len2 = strxfrm(VARDATA(res), str, len + 1);
+	else
+		len2 = strxfrm_l(VARDATA(res), str, len + 1, cached_locale);
+	Assert(len2 <= len);
+	SET_VARSIZE(res, len2 + VARHDRSZ);	/* omit null terminator */
+
+	PG_RETURN_BYTEA_P(res);
 }
 
 PG_FUNCTION_INFO_V1(ora_decode);

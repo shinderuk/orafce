@@ -101,6 +101,21 @@ AS 'MODULE_PATHNAME', 'ora_set_nls_sort'
 LANGUAGE C IMMUTABLE STRICT;
 COMMENT ON FUNCTION oracle.set_nls_sort(text) IS '';
 
+CREATE FUNCTION oracle.nlssort2(text, text)
+RETURNS bytea
+AS 'MODULE_PATHNAME', 'ora_nlssort2'
+LANGUAGE C IMMUTABLE;
+
+CREATE FUNCTION oracle.nlssort2(text)
+RETURNS bytea
+AS $$ SELECT oracle.nlssort2($1, null); $$
+LANGUAGE SQL IMMUTABLE STRICT;
+
+CREATE FUNCTION oracle.set_nls_sort2(text)
+RETURNS void
+AS 'MODULE_PATHNAME', 'ora_set_nls_sort2'
+LANGUAGE C IMMUTABLE STRICT;
+
 CREATE FUNCTION oracle.instr(str text, patt text, start int, nth int)
 RETURNS int
 AS 'MODULE_PATHNAME','plvstr_instr4'
